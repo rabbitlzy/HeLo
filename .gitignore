@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environments and editor settings
+.venv/
+.conda/
+.idea/
+.vscode/
+.env
+
+# Local datasets, extracted features, and model outputs
+data/
+datasets/
+Features/
+features/
+Raw_data/
+Aligned_data/
+*.mat
+*.edf
+*.dsi
+*.mp4
+*.zip
+*.pth
+*.pt
+*.ckpt
+*.pkl
+checkpoint/
+checkpoints/
+runs/
+logs/
+*.log

@@ -1,0 +1,9 @@
+# Local reproduction environment: Python 3.10, Windows, CUDA-enabled PyTorch.
+# Upstream baseline: 396e307f83ed09ad5ed54be218b46dbb389a65e9
+# NumPy 1.x is a deliberate compatibility adjustment for PyTorch 1.12.1.
+# This pins core dependencies, not all transitive dependencies.
+--extra-index-url https://download.pytorch.org/whl/cu116
+torch==1.12.1+cu116
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.4.2
