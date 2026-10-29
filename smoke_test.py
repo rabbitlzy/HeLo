@@ -1,4 +1,4 @@
-"""Check the unmodified HeLo model with synthetic data; no DMER data required."""
+"""Check the reproduction fixes with synthetic data; no DMER data required."""
 
 import torch
 import torch.nn.functional as F
@@ -28,6 +28,9 @@ def main():
     model = HeLo(args).to(device)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    require("label_embedding" in dict(model.named_parameters()), "Label embedding is not registered.")
+    require("label_embedding" in model.state_dict(), "Label embedding is absent from state_dict.")
+    require(any(param is model.label_embedding for group in optimizer.param_groups for param in group["params"]), "Optimizer does not include label embedding.")
 
     eeg = torch.rand(batch_size, args.n_channels, args.dim_eeg, device=device)
     gsr = torch.rand(batch_size, 1, args.dim_gsr, device=device)
@@ -62,6 +65,7 @@ def main():
     print("KL loss: %.6f | CC loss: %.6f | Total loss: %.6f" % (kl_loss.item(), cc_loss.item(), loss.item()))
 
     before = model.Classifier[-1].weight.detach().clone()
+    embedding_before = model.label_embedding.detach().clone()
     optimizer.zero_grad()
     print("Running backward pass...", flush=True)
     loss.backward()
@@ -70,19 +74,38 @@ def main():
     for name, grad in grads:
         require(torch.isfinite(grad).all().item(), "Non-finite gradient: " + name)
     require(any(torch.count_nonzero(grad).item() > 0 for _, grad in grads), "All gradients are zero.")
+    require(model.label_embedding.grad is not None, "Label embedding received no gradient.")
+    require(torch.count_nonzero(model.label_embedding.grad).item() > 0, "Label embedding gradient is zero.")
     optimizer.step()
     require(not torch.equal(before, model.Classifier[-1].weight.detach()), "Classifier weights did not update.")
+    require(not torch.equal(embedding_before, model.label_embedding.detach()), "Label embedding did not update.")
     for name, param in model.named_parameters():
         require(torch.isfinite(param).all().item(), "Non-finite parameter after update: " + name)
     torch.cuda.synchronize(device)
     print("Backward: OK")
     print("Optimizer update: OK")
-    print("Peak PyTorch allocated memory: %.1f MiB" % (torch.cuda.max_memory_allocated(device) / 1024**2))
+    print("Label embedding registered: True")
+    print("Label embedding gradient and update: OK")
 
-    registered = any("label_embedding" in name for name, _ in model.named_parameters())
-    print("Label embedding registered:", registered)
-    if not registered:
-        print("NOTE: Upstream creates label_embedding inside forward(); it is not a persistent model parameter.")
+    model.eval()
+    inputs = (eeg, gsr, ppg, video, labels)
+    with torch.no_grad():
+        first = model(*inputs)[0]
+        second = model(*inputs)[0]
+    require(torch.isfinite(first).all().item() and torch.isfinite(second).all().item(), "Eval output contains NaN or Inf.")
+    difference = (first - second).abs().max().item()
+    require(torch.allclose(first, second, atol=1e-6, rtol=0), "Repeated eval predictions differ.")
+    print("Eval repeat max difference: %.8f" % difference)
+
+    # A fresh model must reproduce the prediction after a strict state restore.
+    restored = HeLo(args).to(device)
+    restored.load_state_dict(model.state_dict(), strict=True)
+    restored.eval()
+    with torch.no_grad():
+        restored_prediction = restored(*inputs)[0]
+    require(torch.allclose(first, restored_prediction, atol=1e-6, rtol=0), "State restore changed prediction.")
+    print("State restore: OK")
+    print("Peak PyTorch allocated memory: %.1f MiB" % (torch.cuda.max_memory_allocated(device) / 1024**2))
     print("SMOKE TEST PASSED (execution only; not evidence of paper reproduction).")
 
 

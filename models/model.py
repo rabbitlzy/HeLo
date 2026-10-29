@@ -22,7 +22,7 @@ class ScaledDotProductAttention(nn.Module):
             attention = attention * scale
         if attn_mask:
             attention = attention.masked_fill_(attn_mask, -np.inf)
-        if use_DropKey:
+        if use_DropKey and self.training:
             m_r = torch.ones_like(attention) * mask_ratio
             attention = attention + torch.bernoulli(m_r) * -1e12
         attention = self.softmax(attention)
@@ -120,6 +120,10 @@ class HeLo(nn.Module):
             nn.Linear(args.feature_dim, args.emotion_classes)
         )
         self.softmax = nn.Softmax(dim=1)
+        # One persistent embedding per label, shared across samples.
+        self.label_embedding = nn.Parameter(
+            torch.rand(1, self.emotion_classes, self.feature_dim)
+        )
     
     def forward(self, eeg, gsr, ppg, video, labels):
         """
@@ -128,7 +132,7 @@ class HeLo(nn.Module):
         :param ppg: ppg data, with dimension [B, 1, 27]
         :param video: video data, with dimension [B, 768]
         """
-        label_embedding = nn.Parameter(torch.rand(eeg.shape[0], self.emotion_classes, self.feature_dim), requires_grad=True).cuda()
+        label_embedding = self.label_embedding.expand(eeg.shape[0], -1, -1)
         eeg = self.eeg_encoder(eeg.reshape(eeg.shape[0], self.n_channels, self.dim_eeg))
         gsr = self.gsr_encoder(gsr.reshape(eeg.shape[0], 1, self.dim_gsr)).reshape(gsr.shape[0], self.n_channels, self.feature_dim)
         ppg = self.ppg_encoder(ppg.reshape(ppg.shape[0], 1, self.dim_ppg)).reshape(ppg.shape[0], self.n_channels, self.feature_dim)

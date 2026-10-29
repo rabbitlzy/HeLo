@@ -35,7 +35,7 @@ class ScaledDotProductAttention(nn.Module):
             attention = attention * scale
         if attn_mask:
             attention = attention.masked_fill_(attn_mask, -np.inf)
-        if use_DropKey:
+        if use_DropKey and self.training:
             m_r = torch.ones_like(attention) * mask_ratio
             attention = attention + torch.bernoulli(m_r) * -1e12
         attention = self.softmax(attention)
