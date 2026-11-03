@@ -134,6 +134,10 @@ class PreparationTests(unittest.TestCase):
                     raw_zip.writestr(member, payload)
 
             directory_args = ["--features-dir", str(features), "--panas-dir", str(raw)]
+            missing_output = root / "missing_subject_output"
+            with self.assertRaisesRegex(ValueError, r"absent from dataset: \[2\]; available IDs: \[1, 36\]"):
+                main(directory_args + ["--output", str(missing_output), "--subjects", "1", "2"])
+            self.assertFalse(missing_output.exists())
             strict_output = root / "strict_output"
             with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "invalid labels"):
                 main(directory_args + ["--output", str(strict_output), "--subjects", "1", "36"])

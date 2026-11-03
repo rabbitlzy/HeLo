@@ -16,22 +16,35 @@
 
 实验室现有 73 份原始特征位于 `D:\DATA\数据集\DMER\03_特征_Features\Features`，73 份问卷位于 `D:\DATA\数据集\DMER\01_原始数据_Raw\Raw_data\被试编号\被试编号\Panas.csv`。特征只有 `feas` 和 `vids`，需生成 `dis_label` 后再运行模型。无需重新打包或解压视频。
 
+**被试编号不连续。** 作者 `params.py` 中的73人名单是1–80去掉3、4、13、16、17、27、31，包含74–80。此前示例误用 `(1..73)`，会请求不存在的编号。应从实际文件名读取编号并与作者名单核对，保留原始编号。
+
 更新后的准备脚本同时支持原有 `--source` 压缩包模式，以及成对使用的 `--features-dir` / `--panas-dir` 解压目录模式。两种方式共用视频ID匹配、评分检查、归一化和输出读回检查；目录方式只查找两层以内的问卷，不递归遍历视频树。示例（实验室 PowerShell）：
 
 ```powershell
 Set-Location -LiteralPath 'D:\helo\HeLo'
+$labFeatureDir = 'D:\DATA\数据集\DMER\03_特征_Features\Features'
+$labSubjects = @(Get-ChildItem -LiteralPath $labFeatureDir -Filter '*.mat' -File |
+    Where-Object { $_.BaseName -match '^\d+$' } |
+    ForEach-Object { [int]$_.BaseName } | Sort-Object)
+$labExpectedSubjects = @(1..80 | Where-Object { $_ -notin @(3, 4, 13, 16, 17, 27, 31) })
+if ($labSubjects.Count -ne 73) { throw "Expected 73 subjects, found $($labSubjects.Count)" }
+if (Compare-Object -ReferenceObject $labExpectedSubjects -DifferenceObject $labSubjects) {
+    throw 'Subject IDs differ from the author configuration; inspect before preparing.'
+}
 $labPrepareArguments = @(
     '-u', 'prepare_dmer.py'
-    '--features-dir', 'D:\DATA\数据集\DMER\03_特征_Features\Features'
+    '--features-dir', $labFeatureDir
     '--panas-dir', 'D:\DATA\数据集\DMER\01_原始数据_Raw\Raw_data'
     '--output', 'D:\helo\HeLo\data\DMER_raw_preserved'
     '--allow-out-of-range'
     '--subjects'
-) + (1..73)
+) + $labSubjects
 & 'C:\conda_envs\helo4090\python.exe' @labPrepareArguments
 ```
 
 输出目录必须没有已有准备报告或同名被试MAT，脚本不会覆盖它们。原始输入只读；新的特征和标签保存在项目已被 Git 忽略的 `data/DMER_raw_preserved`。该输出也与训练入口和计划任务脚本的默认数据位置一致。
+
+诊断 Python 错误时直接运行以上命令并保留完整 traceback 与 `$LASTEXITCODE`。不要在 `$ErrorActionPreference='Stop'` 下用 `2>&1 | Tee-Object` 合并标准错误，否则 Windows PowerShell 可能在第一条标准错误处中断并遮住实际异常。
 
 报告保留每份源文件的SHA-256，并增加 `source_format` 与 `source_content_sha256`。后者按被试编号排序，对编号、特征SHA-256、问卷SHA-256组成的JSON数组（紧凑分隔符，UTF-8）再计算SHA-256，便于跨路径和压缩方式核对源内容。目录模式下 `source` 记录两个输入目录，`archives` 为空；旧压缩包模式的 `source` 仍是源目录字符串。准备完成后须核对73人、54315个样本、源内容校验值以及异常值保留策略，再进行模型smoke test。
 

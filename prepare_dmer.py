@@ -263,8 +263,10 @@ def main(argv=None):
             panas = member_map(panas_source, "panas")
         if not features or set(features) != set(panas):
             raise ValueError("Feature subjects and PANAS subjects differ")
-        if not set(selected).issubset(features):
-            raise ValueError("Requested subject is absent from the dataset")
+        missing_subjects = sorted(set(selected) - set(features))
+        if missing_subjects:
+            raise ValueError("Requested subject IDs absent from dataset: %s; available IDs: %s" %
+                             (missing_subjects, sorted(features)))
         print("Auditing %d subjects; preparing %s" % (len(features), selected), flush=True)
         audit = {}
         for number, subject in enumerate(sorted(features), 1):
