@@ -31,3 +31,10 @@ checkpoints/
 runs/
 logs/
 *.log
+
+# Device-specific environment records and private transfer inventories
+environment_records/
+TRANSFER_MANIFEST.json
+SOURCE_PROVENANCE.json
+*.npz
+*.npy

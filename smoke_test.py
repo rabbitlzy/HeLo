@@ -1,5 +1,7 @@
-"""Check the reproduction fixes with synthetic data; no DMER data required."""
+"""Check execution with synthetic data, or one real batch from --data PATH."""
 
+import argparse
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -13,6 +15,9 @@ def require(condition, message):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data", help="Prepared subject MAT; uses its first and last samples.")
+    options = parser.parse_args()
     require(torch.cuda.is_available(), "CUDA is unavailable in this Python environment.")
     torch.manual_seed(3407)
     torch.cuda.manual_seed_all(3407)
@@ -39,9 +44,29 @@ def main():
     labels = torch.rand(batch_size, args.emotion_classes, device=device) + 0.1
     labels = labels / labels.sum(dim=1, keepdim=True)
 
+    if options.data:
+        from dataset import DMERDataset
+        dataset = DMERDataset(options.data)
+        require(len(dataset) >= batch_size, "Real dataset needs at least two samples.")
+        for name in ("eeg", "gsr", "ppg", "video", "label"):
+            require(np.isfinite(getattr(dataset, name)).all(), "Non-finite dataset field: " + name)
+        require((dataset.label >= 0).all(), "Negative labels.")
+        require(np.allclose(dataset.label.sum(axis=1), 1), "Dataset label sums differ from 1.")
+        indices = [0, len(dataset) - 1]
+        eeg, gsr, ppg, video, labels = (
+            torch.as_tensor(np.stack([dataset[index][column] for index in indices]), dtype=torch.float32, device=device)
+            for column in range(5)
+        )
+        eeg = eeg.reshape(batch_size, args.n_channels, args.dim_eeg)
+        gsr = gsr.reshape(batch_size, 1, args.dim_gsr)
+        ppg = ppg.reshape(batch_size, 1, args.dim_ppg)
+        print("Real dataset samples:", len(dataset))
+        print("Selected sample indices:", indices)
+        print("Selected video IDs:", dataset.data["vids"][indices, 0].tolist())
+
     print("PyTorch:", torch.__version__)
     print("GPU:", torch.cuda.get_device_name(device))
-    print("Synthetic batch size:", batch_size)
+    print("Real batch size:" if options.data else "Synthetic batch size:", batch_size)
     print("Input shapes:", tuple(eeg.shape), tuple(gsr.shape), tuple(ppg.shape), tuple(video.shape))
     print("Running forward pass...", flush=True)
     predict, learned_corr, gt_corr = model(eeg, gsr, ppg, video, labels)

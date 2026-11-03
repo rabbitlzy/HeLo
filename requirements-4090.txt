@@ -1,0 +1,6 @@
+# Windows / Python 3.10. Install CUDA PyTorch separately using the official index.
+# Base environment verified on both laboratory RTX 4090 GPUs on 2026-11-03.
+# HeLo model smoke test is still required after synchronizing code and data.
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.4.2
