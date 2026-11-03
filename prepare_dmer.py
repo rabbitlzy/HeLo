@@ -1,4 +1,4 @@
-"""Audit DMER archives and prepare selected subjects for the HeLo loader.
+"""Audit DMER archives or extracted folders and prepare selected subjects.
 
 Explicit baseline: normalize each trial's ten raw PANAS scores by their sum.
 This is a documented reproduction assumption, not verified author preprocessing.
@@ -77,12 +77,10 @@ def archive_parts(root, stem):
     return parts
 
 
-def member_map(archive, kind):
+def subject_members(names, kind):
     result = {}
-    for entry in archive.infolist():
-        if entry.is_dir():
-            continue
-        path = PurePosixPath(entry.filename.replace("\\", "/"))
+    for name in names:
+        path = PurePosixPath(name.replace("\\", "/"))
         if kind == "features":
             if path.suffix.lower() != ".mat" or not path.stem.isdigit():
                 continue
@@ -91,12 +89,54 @@ def member_map(archive, kind):
             if path.name.lower() != "panas.csv":
                 continue
             if not path.parent.name.isdigit():
-                raise ValueError("Cannot identify PANAS subject: " + entry.filename)
+                raise ValueError("Cannot identify PANAS subject: " + name)
             subject = int(path.parent.name)
         if subject in result:
             raise ValueError("Duplicate %s member for subject %d" % (kind, subject))
-        result[subject] = entry.filename
+        result[subject] = name
     return result
+
+
+def member_map(archive, kind):
+    return subject_members((entry.filename for entry in archive.infolist() if not entry.is_dir()), kind)
+
+
+class DirectorySource:
+    """Read extracted feature/questionnaire files without scanning video trees."""
+    def __init__(self, root):
+        self.root = root.resolve(strict=True)
+        if not self.root.is_dir():
+            raise ValueError("Expected an extracted directory: " + str(self.root))
+
+    def members(self, kind):
+        if kind == "features":
+            paths = list(self.root.glob("*.mat"))
+        else:
+            # Accepted layouts: Raw_data/<subject>/Panas.csv or
+            # Raw_data/<subject>/<subject>/Panas.csv. Do not traverse videos.
+            paths = list(self.root.glob("*/Panas.csv")) + list(self.root.glob("*/*/Panas.csv"))
+            for path in paths:
+                relative = path.relative_to(self.root)
+                if len(relative.parts) == 3 and (
+                    not relative.parts[0].isdigit()
+                    or not relative.parts[1].isdigit()
+                    or int(relative.parts[0]) != int(relative.parts[1])
+                ):
+                    raise ValueError("Conflicting PANAS subject folders: " + str(relative))
+        return subject_members((path.relative_to(self.root).as_posix() for path in paths if path.is_file()), kind)
+
+    def read(self, name):
+        path = (self.root / name).resolve(strict=True)
+        if self.root not in path.parents:
+            raise ValueError("Source member escapes directory: " + name)
+        return path.read_bytes()
+
+
+def source_content_sha256(audit):
+    """Identify paired source bytes independently of directory/ZIP layout."""
+    rows = [[int(subject), audit[subject]["feature_sha256"], audit[subject]["panas_sha256"]]
+            for subject in sorted(audit, key=int)]
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def parse_panas(payload, allow_out_of_range=False):
@@ -137,9 +177,9 @@ def validate_features(data):
     return features, ids
 
 
-def read_subject(feature_zip, raw_zip, feature_name, panas_name, allow_out_of_range=False):
-    feature_bytes = feature_zip.read(feature_name)
-    panas_bytes = raw_zip.read(panas_name)
+def read_subject(feature_source, panas_source, feature_name, panas_name, allow_out_of_range=False):
+    feature_bytes = feature_source.read(feature_name)
+    panas_bytes = panas_source.read(panas_name)
     features, ids = validate_features(loadmat(io.BytesIO(feature_bytes)))
     counts = np.bincount(ids[:, 0].astype(np.int64), minlength=32)
     metadata = {
@@ -179,29 +219,48 @@ def write_subject(target, prepared):
     os.replace(temporary, target)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--source", type=Path, help="Directory containing Features.zip and Raw_data.zip[.001...].")
+    parser.add_argument("--features-dir", type=Path, help="Extracted directory directly containing numbered subject MAT files.")
+    parser.add_argument("--panas-dir", type=Path, help="Extracted Raw_data directory containing subject PANAS files.")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "data" / "Features")
     parser.add_argument("--subjects", type=int, nargs="+", default=[1])
     parser.add_argument("--allow-out-of-range", action="store_true", help="Explicit sensitivity policy: preserve positive integer ratings above 9, record them, and do not clip.")
-    args = parser.parse_args()
-    root = args.source.resolve(strict=True)
+    args = parser.parse_args(argv)
+    directory_mode = args.features_dir is not None or args.panas_dir is not None
+    if directory_mode:
+        if args.source is not None or args.features_dir is None or args.panas_dir is None:
+            parser.error("Use both --features-dir and --panas-dir, without --source")
+        feature_source = DirectorySource(args.features_dir)
+        panas_source = DirectorySource(args.panas_dir)
+        source_roots = [feature_source.root, panas_source.root]
+        source_description = {"features_dir": str(feature_source.root), "panas_dir": str(panas_source.root)}
+        archive_paths = []
+    else:
+        if args.source is None:
+            parser.error("Provide --source, or both --features-dir and --panas-dir")
+        root = args.source.resolve(strict=True)
+        source_roots = [root]
+        source_description = str(root)
+        archive_paths = [root / "Features.zip"] + archive_parts(root, "Raw_data.zip")
     output = args.output.resolve()
     selected = sorted(set(args.subjects))
-    if output == root or root in output.parents:
+    if any(output == root or root in output.parents for root in source_roots):
         raise ValueError("Prepared output must be outside the original dataset directory")
-    feature_path = root / "Features.zip"
-    raw_paths = archive_parts(root, "Raw_data.zip")
     report_path = output / "preparation_report.json"
     if report_path.exists() or any((output / (str(subject) + ".mat")).exists() for subject in selected):
         raise FileExistsError("Output already exists; use a fresh output directory to preserve provenance")
 
     with ExitStack() as stack:
-        feature_zip = stack.enter_context(zipfile.ZipFile(feature_path))
-        raw_zip = stack.enter_context(zipfile.ZipFile(JoinedParts(raw_paths, stack)))
-        features = member_map(feature_zip, "features")
-        panas = member_map(raw_zip, "panas")
+        if directory_mode:
+            features = feature_source.members("features")
+            panas = panas_source.members("panas")
+        else:
+            feature_source = stack.enter_context(zipfile.ZipFile(archive_paths[0]))
+            panas_source = stack.enter_context(zipfile.ZipFile(JoinedParts(archive_paths[1:], stack)))
+            features = member_map(feature_source, "features")
+            panas = member_map(panas_source, "panas")
         if not features or set(features) != set(panas):
             raise ValueError("Feature subjects and PANAS subjects differ")
         if not set(selected).issubset(features):
@@ -209,7 +268,7 @@ def main():
         print("Auditing %d subjects; preparing %s" % (len(features), selected), flush=True)
         audit = {}
         for number, subject in enumerate(sorted(features), 1):
-            _, metadata = read_subject(feature_zip, raw_zip, features[subject], panas[subject], args.allow_out_of_range)
+            _, metadata = read_subject(feature_source, panas_source, features[subject], panas[subject], args.allow_out_of_range)
             audit[str(subject)] = metadata
             if number % 10 == 0 or number == len(features):
                 print("Audited %d/%d" % (number, len(features)), flush=True)
@@ -223,15 +282,17 @@ def main():
         output.mkdir(parents=True, exist_ok=True)
         outputs = {}
         for subject in selected:
-            prepared, _ = read_subject(feature_zip, raw_zip, features[subject], panas[subject], args.allow_out_of_range)
+            prepared, _ = read_subject(feature_source, panas_source, features[subject], panas[subject], args.allow_out_of_range)
             target = output / (str(subject) + ".mat")
             write_subject(target, prepared)
             outputs[str(subject)] = {"path": str(target), "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
             print("Prepared subject %d: %d samples" % (subject, len(prepared["feas"])), flush=True)
         report = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "source": str(root),
-            "archives": [{"path": str(path), "size_bytes": path.stat().st_size} for path in [feature_path] + raw_paths],
+            "source": source_description,
+            "source_format": "directories" if directory_mode else "archives",
+            "source_content_sha256": source_content_sha256(audit),
+            "archives": [{"path": str(path), "size_bytes": path.stat().st_size} for path in archive_paths],
             "label_rule": "raw PANAS score / sum of ten raw PANAS scores for the same subject and video",
             "label_rule_status": "explicit reproduction assumption; not verified HeLo author preprocessing",
             "label_order": "Panas.csv columns 2..11, preserved; emotion names not inferred",
@@ -251,6 +312,7 @@ def main():
             json.dump(report, handle, ensure_ascii=False, indent=2)
         print("Rating range (valid subjects only):", report["valid_subject_rating_range"])
         print("Total feature samples:", report["total_feature_samples"])
+        print("Source content SHA-256:", report["source_content_sha256"])
         print("Report:", report_path)
         print("DATA PREPARATION PASSED; label transformation is a documented assumption.")
 

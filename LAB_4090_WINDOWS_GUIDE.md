@@ -12,6 +12,29 @@
 
 下文保留 2026-10-30 的历史迁移流程。尚未执行的命令必须将示例项目路径 `D:\Research\HeLo` 改为 `D:\helo\HeLo`，将环境路径 `D:\conda_envs\helo4090` 改为 `C:\conda_envs\helo4090`。环境创建和安装步骤已经完成，无需重复。SSH 仍未配置；模型检查、训练、恢复和持续运行按验收顺序继续。
 
+### 已确认的解压目录：直接生成训练标签
+
+实验室现有 73 份原始特征位于 `D:\DATA\数据集\DMER\03_特征_Features\Features`，73 份问卷位于 `D:\DATA\数据集\DMER\01_原始数据_Raw\Raw_data\被试编号\被试编号\Panas.csv`。特征只有 `feas` 和 `vids`，需生成 `dis_label` 后再运行模型。无需重新打包或解压视频。
+
+更新后的准备脚本同时支持原有 `--source` 压缩包模式，以及成对使用的 `--features-dir` / `--panas-dir` 解压目录模式。两种方式共用视频ID匹配、评分检查、归一化和输出读回检查；目录方式只查找两层以内的问卷，不递归遍历视频树。示例（实验室 PowerShell）：
+
+```powershell
+Set-Location -LiteralPath 'D:\helo\HeLo'
+$labPrepareArguments = @(
+    '-u', 'prepare_dmer.py'
+    '--features-dir', 'D:\DATA\数据集\DMER\03_特征_Features\Features'
+    '--panas-dir', 'D:\DATA\数据集\DMER\01_原始数据_Raw\Raw_data'
+    '--output', 'D:\helo\HeLo\data\DMER_raw_preserved'
+    '--allow-out-of-range'
+    '--subjects'
+) + (1..73)
+& 'C:\conda_envs\helo4090\python.exe' @labPrepareArguments
+```
+
+输出目录必须没有已有准备报告或同名被试MAT，脚本不会覆盖它们。原始输入只读；新的特征和标签保存在项目已被 Git 忽略的 `data/DMER_raw_preserved`。该输出也与训练入口和计划任务脚本的默认数据位置一致。
+
+报告保留每份源文件的SHA-256，并增加 `source_format` 与 `source_content_sha256`。后者按被试编号排序，对编号、特征SHA-256、问卷SHA-256组成的JSON数组（紧凑分隔符，UTF-8）再计算SHA-256，便于跨路径和压缩方式核对源内容。目录模式下 `source` 记录两个输入目录，`archives` 为空；旧压缩包模式的 `source` 仍是源目录字符串。准备完成后须核对73人、54315个样本、源内容校验值以及异常值保留策略，再进行模型smoke test。
+
 整理日期：2026-10-30。已知实验室是 Windows，目前尚未取得连接地址和账号。本指南给出操作流程，尚未在实验室实际连接或验证环境。
 
 ## 1. 先明确两台电脑分别做什么
