@@ -48,6 +48,19 @@ $labPrepareArguments = @(
 
 报告保留每份源文件的SHA-256，并增加 `source_format` 与 `source_content_sha256`。后者按被试编号排序，对编号、特征SHA-256、问卷SHA-256组成的JSON数组（紧凑分隔符，UTF-8）再计算SHA-256，便于跨路径和压缩方式核对源内容。目录模式下 `source` 记录两个输入目录，`archives` 为空；旧压缩包模式的 `source` 仍是源目录字符串。准备完成后须核对73人、54315个样本、源内容校验值以及异常值保留策略，再进行模型smoke test。
 
+### 单人完整运行后：验证磁盘断点恢复
+
+新增 `verify_resume.py`，以已经完成的单独1号 `code-repaired` 运行作为连续训练参照。它先检查Python/PyTorch/NumPy/GPU型号及训练代码、数据SHA-256与参照一致，在新目录运行同样设置；第25轮检查点原子保存完成后主动退出，再用新Python进程调用原入口的 `--resume`。验证脚本不改动训练或模型源文件，不覆盖参照结果。
+
+```powershell
+Set-Location -LiteralPath 'D:\helo\HeLo'
+& 'C:\conda_envs\helo4090\python.exe' -u verify_resume.py --reference 'runs\4090_subject1_code_300e' --output 'runs\4090_resume_validation'
+```
+
+输出目录必须尚不存在。脚本检查恢复起点为25轮、优化器/学习率调度器/CPU与CUDA随机状态已保存，随后核对最终划分、测试标签与索引、每轮学习率、预测、六项指标及全部模型参数。浮点绝对容差固定为1e-6，同时报告是否逐元素完全一致。成功标记为 `RESUME_VERIFICATION_PASSED`，详情在 `verification.json`；两阶段日志与第25轮断点副本保留在验证目录。
+
+这里的主动退出码75是验证脚本预期行为，最后总退出码应为0。这验证保存完成后的跨进程恢复；远程断开/注销后的持续运行和写入中断仍需单独验证。参照必须是同一环境和同一训练代码产生的已完成单人运行，不能用笔记本旧环境结果充当实验室恢复参照。
+
 整理日期：2026-10-30。已知实验室是 Windows，目前尚未取得连接地址和账号。本指南给出操作流程，尚未在实验室实际连接或验证环境。
 
 ## 1. 先明确两台电脑分别做什么
